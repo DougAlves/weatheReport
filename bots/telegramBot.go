@@ -1,6 +1,7 @@
 package bots
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,35 +9,46 @@ import (
 )
 
 type telegram struct {
-	token   string
-	updates map[string]interface{}
+	token      string
+	updates    []TelegramUpdate
+	topMessage Message
 }
 
-type chat struct {
-	id                  int
-	firstName, lastName string
-	chatType            string
+type Chat struct {
+	Id        uint64 `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"Last_name"`
+	ChatType  string `json:"type"`
 }
 
-type message struct {
-	room      chat
-	messageId int32
-	text      string
-	author    author
+type Message struct {
+	Room      Chat   `json:"chat"`
+	MessageId uint64 `json:"message_id"`
+	Text      string `json:"text"`
+	Date      uint64 `json:"date"`
+	Author    Author `json:"from"`
 }
 
-type telegramUpdate struct {
-	updateId int32
-	date     int32
-	message  message
+type TelegramUpdate struct {
+	UpdateId uint64  `json:"update_id"`
+	Message  Message `json:"message"`
 }
 
-type author struct {
-	firstName string
-	lastName  string
-	id        int32
-	isBot     bool
-	username  string
+type TelegramUpdateDTO struct {
+	Ok      bool             `json:"ok"`
+	Updates []TelegramUpdate `json:"result"`
+}
+
+type SentMessageReturn struct {
+	Ok          bool    `json:"ok"`
+	SentMessage Message `json:"result"`
+}
+type Author struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Id        uint64 `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	Username  string `json:"username"`
 }
 
 func (bot *telegram) Initialize(token string) {
@@ -44,82 +56,111 @@ func (bot *telegram) Initialize(token string) {
 }
 
 func (bot *telegram) SendMessage(message string) {
-	fmt.Printf("enviando mensagem: %s\n", message)
-}
-func (bot *telegram) PullUpdates() {
-	updates, err := sendAction(bot.token, "getUpdates")
-	if err != nil {
-		panic("coud not get updates")
+	url, m := fmt.Sprintf("https://api.telegram.org/bot%s/%s", bot.token, "sendMessage"), new(bytes.Buffer)
+	body := map[string]interface{}{
+		"chat_id": bot.topMessage.Room.Id,
+		"text":    message,
 	}
-	bot.updates = updates
-}
-func (bot *telegram) Println() {
-	fmt.Printf("%T", bot)
-}
 
-func sendAction(token, action string) (map[string]interface{}, error) {
-
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", token, action)
-	resp, err := http.Get(url)
+	json.NewEncoder(m).Encode(body)
+	resp, err := http.Post(url, "application/json", m)
 	if err != nil {
-		return map[string]interface{}{}, err
+		return
 	}
 
 	defer resp.Body.Close()
 	res, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return map[string]interface{}{}, err
+		return
 	}
-	fmt.Println(string(res))
-	var m map[string]interface{}
-	err = json.Unmarshal(res, &m)
+	var messageSent SentMessageReturn
+	err = json.Unmarshal(res, &messageSent)
 	if err != nil {
-		return map[string]interface{}{}, err
+		panic(err)
 	}
-	fmt.Println(m)
-	for _, up := range m["result"].([]interface{}) {
-		var update telegramUpdate
-		for key, value := range up.(map[string]interface{}) {
-			fmt.Println(key)
-			switch key {
-			case "message":
-				{
-					v := value.(map[string]interface{})
-					id, ok := v["message_id"].(float64)
-					if !ok {
-						panic("uepa1")
-					}
-					text, ok := v["text"].(string)
-					if !ok {
-						panic("uepa2")
-					}
-					authorM, ok := v["from"].(map[string]interface{})
-					if !ok {
-						panic("uepa3")
-					}
-					update.message = message{
-						messageId: int32(id),
-						text:      text,
-						author: author{
-							id:        int32(authorM["id"].(float64)),
-							firstName: authorM["first_name"].(string),
-							lastName:  authorM["last_name"].(string),
-							isBot:     authorM["is_bot"].(bool),
-							username:  authorM["username"].(string),
-						},
-					}
-				}
-			case "update_id":
-				{
-					update.updateId = int32(value.(float64))
-				}
-			case "date":
-				{
-					update.date = value.(int32)
-				}
-			}
-			fmt.Println(update)
+
+	fmt.Println(messageSent)
+
+}
+func (bot *telegram) PullUpdates() {
+	updates, err := sendAction(bot.token, "getUpdates")
+	if err != nil {
+		panic(err)
+	}
+	bot.updates = updates
+}
+
+func (bot telegram) Run() {
+	for {
+		bot.PullUpdates()
+		updatesChannel := updatesToChannel(bot.updates)
+		done := treatMessage(updatesChannel, bot)
+		for processedUpdate := range done {
+			processedUpdates = append(processedUpdates, processedUpdate)
 		}
 	}
-	return m, nil
+}
+
+var processedUpdates []TelegramUpdate
+
+func updatesToChannel(updates []TelegramUpdate) <-chan TelegramUpdate {
+	out := make(chan TelegramUpdate)
+	go func() {
+		for _, update := range updates {
+			if !updateProcessed(update) {
+				out <- update
+			}
+		}
+		close(out)
+	}()
+	return out
+}
+
+func treatMessage(upChan <-chan TelegramUpdate, bot telegram) <-chan TelegramUpdate {
+	out := make(chan TelegramUpdate)
+	go func() {
+		for update := range upChan {
+			if update.Message.Text == "/ping" {
+				bot.topMessage = update.Message
+				bot.SendMessage("pong")
+			}
+			out <- update
+		}
+		close(out)
+	}()
+	return out
+}
+
+func updateProcessed(update TelegramUpdate) bool {
+	for _, up := range processedUpdates {
+		if up.UpdateId == update.UpdateId {
+			return true
+		}
+	}
+	return false
+}
+
+func (bot *telegram) Println() {
+	fmt.Printf("%T", bot)
+}
+
+func sendAction(token, action string) ([]TelegramUpdate, error) {
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", token, action)
+	resp, err := http.Get(url)
+	if err != nil {
+		return []TelegramUpdate{}, err
+	}
+
+	defer resp.Body.Close()
+	res, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return []TelegramUpdate{}, err
+	}
+	var updates TelegramUpdateDTO
+	err = json.Unmarshal(res, &updates)
+	if err != nil {
+		return []TelegramUpdate{}, err
+	}
+	return updates.Updates, nil
 }

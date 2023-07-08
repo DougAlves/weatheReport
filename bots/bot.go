@@ -5,6 +5,7 @@ type Bot interface {
 	SendMessage(string)
 	PullUpdates()
 	Println()
+	Run()
 }
 
 func GetBot(arg string) Bot {

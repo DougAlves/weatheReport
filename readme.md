@@ -1,8 +1,8 @@
 # Wheather Report
 
-Telegram bot for go
+Telegram bot
 
-It responds to your '/ping' with the logical answer pong only when I'm runnig it
+It responds to your '/ping' with the only logical answer "pong", but only when I'm runnig it
 
 [find me at][http://t.me/weatherHandBot]
 
